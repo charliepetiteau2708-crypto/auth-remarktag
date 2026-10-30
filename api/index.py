@@ -5,7 +5,7 @@ import json
 from flask import Flask, request, jsonify
 
 
-app = Flask(auth-remarktag)
+app = Flask(__name__)
 
 class settings:
     TitleId = "88DAF
