@@ -9,7 +9,7 @@ app = Flask(__name__)
 TITLE_ID = "486AF"
 SECRET_KEY = "838K4RPA73XPSEE41TB4Z3I7X7WSUFEWN3GI43S6NM5ZAWQZOW"
 API_KEY = "OC|1365689723299907|6cbb75dc9a87f431a12d4aaf5bcf6cfd
-PHOTON_WEBHOOK_URL = "https://88DAF.playfablogic.com/webhook/1/prod/ISMD8K6BFN6QHKA9SHRM9913H4XFEH189CQ7XTMH7ZXPMF3C3I"
+PHOTON_WEBHOOK_URL = "https://discord.com/api/webhooks/1565770066035871937/UX9Uo4Z5Ekbv4d-ik5vzreYfnN-_JqMw5kTtp9HyNLDxXtJPqaIz4r2ykBjOx6MhZDJ_"
 
 def get_auth_headers():
     return {"Content-Type": "application/json", "X-SecretKey": SECRET_KEY}
