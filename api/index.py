@@ -24,7 +24,7 @@ def ReturnFunctionJson(data, funcname, funcparam={}):
         "TitlePlayerAccountId")
 
     req = requests.post(
-        url=f"https://{settings.88DAF}.playfabapi.com/Server/ExecuteCloudScript",
+        url=f"https://88DAF.playfabapi.com/Server/ExecuteCloudScript",
         json={
             "PlayFabId": userId,
             "FunctionName": funcname,
