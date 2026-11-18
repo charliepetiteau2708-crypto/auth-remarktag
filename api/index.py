@@ -1,349 +1,326 @@
-from flask import Flask, request, jsonify
-import json
-import hashlib
-import requests
-import uuid
-import time
-import os
+/*
+ Fan-game backend (Node.js 18+): PlayFab + Photon auth, polls, cosmetics.
 
-app = Flask(__name__)
+ Environment variables:
+   TITLE_ID          PlayFab title id
+   PLAYFAB_SECRET    PlayFab secret key (use a NEW one, rotate the old one)
+   DISCORD_WEBHOOK   optional, general log webhook
+   PHOTON_WEBHOOK    optional, photon auth log webhook
+   CATALOG_VERSION   optional, default "Cosmetics"
+   CURRENCY_CODE     optional, default "SR"
+   PORT              optional, default 8080
+*/
+const express = require("express");
+const crypto = require("crypto");
 
-TITLE_ID = ("7410A")
-SECRET_KEY = ("YQTCJTHXITO5I1XCX7RSZA3WMC6R16J8RKEY5MH11EQ4DSZPGI")
-DISCORD_WEBHOOK = ("https://discord.com/api/webhooks/1566549583650095124/vMl_vwS6eZ7E1OdKvhw-tzlcKlhsXd2e3L3Xz478tFPuJDGyptwlcgR-3SHZdc2JSV0H")
-PHOTON_WEBHOOK_URL = ("https://discord.com/api/webhooks/1567328180589822123/gvYn4gRdC3bJYQypCzYpw8nnyQ3y3PXqDLChP69rsQyV3EZEvp_J-wrDyLihKFOsjL2R")
+const TITLE_ID = process.env.TITLE_ID || "7410A";
+const SECRET_KEY = process.env.PLAYFAB_SECRET || "YQTCJTHXITO5I1XCX7RSZA3WMC6R16J8RKEY5MH11EQ4DSZPGI";
+const DISCORD_WEBHOOK = process.env.DISCORD_WEBHOOK || "https://discord.com/api/webhooks/1566549583650095124/vMl_vwS6eZ7E1OdKvhw-tzlcKlhsXd2e3L3Xz478tFPuJDGyptwlcgR-3SHZdc2JSV0H";
+const PHOTON_WEBHOOK = process.env.PHOTON_WEBHOOK || "https://discord.com/api/webhooks/1567328180589822123/gvYn4gRdC3bJYQypCzYpw8nnyQ3y3PXqDLChP69rsQyV3EZEvp_J-wrDyLihKFOsjL2R";
+const CATALOG_VERSION = process.env.CATALOG_VERSION || "DLC";
+const CURRENCY_CODE = process.env.CURRENCY_CODE || "SR";
+const PORT = process.env.PORT || 8080;
 
-@app.route("/", methods=["POST", "GET"])
-def main():
-    return "Backends For depso ty for being with the server :)"
+if (!TITLE_ID || !SECRET_KEY) {
+  console.error("Set TITLE_ID and PLAYFAB_SECRET environment variables.");
+  process.exit(1);
+}
 
-def Tippys_Fetch_Poll():
-    global poll_shit
+const PF = `https://${TITLE_ID}.playfabapi.com`;
+const app = express();
+app.use(express.json());
 
-    whatsabool = request.get_json()
+// ------------------------------------------------------------ helpers
+async function pf(path, body = {}) {
+  const r = await fetch(PF + path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-SecretKey": SECRET_KEY },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(8000),
+  });
+  if (!r.ok) throw new Error(`PlayFab ${path} -> ${r.status}`);
+  return (await r.json()).data || {};
+}
 
-    TitleId = whatsabool.get("settings.TitleId")
-    PlayFabId = whatsabool.get("PlayFabId")
-    PlayFabTicket = whatsabool.get("PlayFabTicket")
+// fire-and-forget so logging never slows a player down
+function webhook(url, payload) {
+  if (!url) return;
+  fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(5000),
+  }).catch((e) => console.log("[WEBHOOK ERROR]", e.message));
+}
 
-    vote_stuff = [
-        {
-            "PollId": 2,
-            "Question": "ARE YOU IN THE DISCORD YET?",
-            "VoteOptions": ["YES", "NO"],
-            "VoteCount": [],
-            "PredictionCount": [],
-            "StartTime": f"{date.today().strftime('%Y-%m-%d')}",
-            "EndTime": "2025-08-17T17:00:00",
-            "isActive": True
-        },
-        {
-            "PollId": 3,
-            "Question": "AM I SIGMA?",
-            "VoteOptions": ["YESSS", "NO!"],
-            "VoteCount": [184439, 0],
-            "PredictionCount": [102522, 110490],
-            "StartTime": "2025-03-07T18:00:00",
-            "EndTime": "2025-03-14T17:00:00",
-            "isActive": False
-        }
-    ]
+function log(message, level = "INFO") {
+  console.log(`[${level}] ${message}`);
+  webhook(DISCORD_WEBHOOK, {
+    embeds: [{ title: level, description: message, color: level === "INFO" ? 3066993 : 15158332 }],
+  });
+}
 
-    poll_shit = vote_stuff
+async function validateTicket(ticket) {
+  if (!ticket) return null;
+  try {
+    const d = await pf("/Server/AuthenticateSessionTicket", { SessionTicket: ticket });
+    return d.UserInfo.PlayFabId;
+  } catch (e) {
+    console.log("[TICKET INVALID]", e.message);
+    return null;
+  }
+}
 
-    return jsonify(vote_stuff), 200
+// ------------------------------------------------------------ nonces
+const nonces = new Map();
+const NONCE_TTL = 300_000;
 
-@app.route("/api/Vote", methods=["POST"])
-def Tippys_VoteApi():
-    VOTING_WEBHOOK = ""
+function generateNonce() {
+  const n = crypto.randomUUID().replace(/-/g, "");
+  nonces.set(n, Date.now());
+  return n;
+}
+function consumeNonce(n) {
+  const t = nonces.get(n);
+  nonces.delete(n);
+  return t !== undefined && Date.now() - t < NONCE_TTL;
+}
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, t] of nonces) if (now - t > NONCE_TTL) nonces.delete(k);
+}, 60_000).unref();
 
-    get = request.get_json()
+app.all("/", (req, res) => res.send("Backend is running :)"));
 
-    PollId = get.get("PollId")
-    TitleId = get.get("TitleId")
-    PlayFabId = get.get("PlayFabId")
-    OculusId = get.get("OculusId")
-    UserNonce = get.get("UserNonce")
-    UserPlatform = get.get("UserPlatform")
-    OptionIndex = get.get("OptionIndex")
-    IsPrediction = get.get("IsPrediction")
-    PlayFabTicket = get.get("PlayFabTicket")
-    AppVersion = get.get("AppVersion")
+app.get("/api/GenerateNonce", (req, res) => res.json({ nonce: generateNonce() }));
 
-    if get is None:
-        return jsonify({"Message": "Something Happened"}), 400
+// ------------------------------------------------------------ login
+app.post("/api/PlayFabAuthentication", async (req, res) => {
+  const { CustomId: customId, Nonce: nonce, OculusAccessToken: oculusToken, Platform: platform } =
+    req.body || {};
 
-    find = next((p for p in poll_shit if p["PollId"] == PollId), None)
+  if (!customId || !nonce || !oculusToken || !platform)
+    return res.status(400).json({ error: "Missing parameters" });
+  if (!consumeNonce(nonce)) return res.status(403).json({ error: "Invalid nonce" });
+  if (String(platform).toLowerCase() !== "quest")
+    return res.status(403).json({ error: "Platform not allowed" });
 
-    if not find:
-        return jsonify({"Message": "Poll not found"}), 404
+  let orgScopedId;
+  try {
+    const ov = await fetch(
+      `https://graph.oculus.com/me?access_token=${encodeURIComponent(oculusToken)}`,
+      { signal: AbortSignal.timeout(8000) }
+    );
+    if (!ov.ok) throw new Error(`status ${ov.status}`);
+    orgScopedId = (await ov.json()).id;
+  } catch (e) {
+    log(`Oculus verification failed for ${customId}: ${e.message}`, "ERROR");
+    return res.status(403).json({ error: "Oculus token verification failed" });
+  }
 
-    embed = {
-        "embeds": [
-            {
-                "title": "** A PLAYER HAS VOTED 📝 **",
-                "description": (
-                    "\n\n**↓ Vote Details ↓**\n\n"
-                    ""
-                    f"VOTE QUESTION: {find['Question']}\n"
-                    f"VOTING FOR: {find['VoteOptions'][OptionIndex]}\n"
-                    f"PREDICTION: {str(IsPrediction)}\n"
-                    f"PollId: {str(PollId)}\n"
-                    "\n\n"
-                    "**↓ Player Details ↓**\n\n"
-                    f"USER ID: {str(PlayFabId)}\n"
-                    f"OCULUS ID: {str(OculusId)}\n"
-                    f"PLATFORM: {str(UserPlatform)}\n"
-                    f"PlayFabTicket: {str(PlayFabTicket)}\n"
-                    f"NONCE: {str(UserNonce)}\n"
-                    f"APPVERSION: {str(AppVersion)}\n"
-                    f"Finally, Game Is {str(setttings.TitleId)}"
-                ),
-                "color": 63488
-            }
-        ]
+  let login;
+  try {
+    login = await pf("/Server/LoginWithServerCustomId", {
+      ServerCustomId: customId,
+      CreateAccount: true,
+    });
+  } catch (e) {
+    log(`PlayFab login failed for ${customId}: ${e.message}`, "ERROR");
+    return res.status(403).json({ error: "PlayFab login failed" });
+  }
+
+  const sessionTicket = login.SessionTicket;
+
+  // link in the background so login responds faster
+  fetch(`${PF}/Client/LinkCustomID`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Authorization": sessionTicket },
+    body: JSON.stringify({ CustomId: orgScopedId, ForceLink: true }),
+    signal: AbortSignal.timeout(8000),
+  }).catch((e) => console.log("[LINK ERROR]", e.message));
+
+  log(`Login OK: ${customId} / ${orgScopedId}`);
+
+  // Full ticket must be returned (old code truncated it, which breaks the client)
+  res.json({
+    PlayFabId: login.PlayFabId,
+    SessionTicket: sessionTicket,
+    EntityToken: login.EntityToken.EntityToken,
+    NonceUsed: nonce,
+    OrgScopedId: orgScopedId,
+  });
+});
+
+// ------------------------------------------------------------ photon
+app.all("/api/v3/Photon", async (req, res) => {
+  const j = Object.keys(req.body || {}).length ? req.body : req.query;
+  const { Ticket, Nonce, AppId, Platform, CustomId, OrgScopedId, AppVersion = "Unknown" } = j;
+
+  // Photon custom auth: ResultCode 1 = success, 2 = failed
+  const fail = (msg) =>
+    res.status(403).json({ ResultCode: 2, Message: msg, status: "error", message: msg });
+
+  if (AppId !== TITLE_ID) return fail("Invalid App ID");
+  if (Platform !== "Android") return fail("Invalid platform");
+  if (!Nonce || !consumeNonce(Nonce)) return fail("Invalid nonce");
+  if (!CustomId || !(CustomId.startsWith("OC") || CustomId.startsWith("PI")))
+    return fail("Invalid Custom ID");
+
+  const playfabId = await validateTicket(Ticket);
+  if (!playfabId) return fail("Invalid session ticket");
+
+  webhook(PHOTON_WEBHOOK, {
+    username: "Photon AuthBot",
+    embeds: [
+      {
+        title: "Photon Auth",
+        color: 0x00ff99,
+        fields: [
+          { name: "CustomId", value: String(CustomId), inline: true },
+          { name: "AppVersion", value: String(AppVersion), inline: true },
+          { name: "PlayFabId", value: playfabId, inline: true },
+        ],
+      },
+    ],
+  });
+
+  res.json({
+    ResultCode: 1,
+    Message: "Authenticated",
+    UserId: playfabId,
+    status: "success",
+    message: "Session validated",
+  });
+});
+
+// ------------------------------------------------------------ title data (cached 60s)
+let tdCache = { data: null, t: 0 };
+app.all("/api/td", async (req, res) => {
+  if (tdCache.data && Date.now() - tdCache.t < 60_000) return res.json(tdCache.data);
+  try {
+    const d = (await pf("/Server/GetTitleData")).Data || {};
+    tdCache = { data: d, t: Date.now() };
+    res.json(d);
+  } catch {
+    res.json(tdCache.data || {});
+  }
+});
+
+// ------------------------------------------------------------ cosmetics
+let catalogCache = { items: null, t: 0 };
+async function getCatalog() {
+  if (!catalogCache.items || Date.now() - catalogCache.t > 120_000) {
+    const d = await pf("/Server/GetCatalogItems", { CatalogVersion: CATALOG_VERSION });
+    const items = {};
+    for (const i of d.Catalog || []) items[i.ItemId] = i;
+    catalogCache = { items, t: Date.now() };
+  }
+  return catalogCache.items;
+}
+
+// Body: { PlayFabTicket }
+app.post("/api/GetCosmetics", async (req, res) => {
+  const pid = await validateTicket((req.body || {}).PlayFabTicket);
+  if (!pid) return res.status(403).json({ Message: "Invalid ticket" });
+  try {
+    const inv = await pf("/Server/GetUserInventory", { PlayFabId: pid });
+    res.json({ Inventory: inv.Inventory || [], VirtualCurrency: inv.VirtualCurrency || {} });
+  } catch (e) {
+    res.status(502).json({ Message: `PlayFab error: ${e.message}` });
+  }
+});
+
+// Body: { PlayFabTicket, ItemId }
+app.post("/api/PurchaseCosmetic", async (req, res) => {
+  const { PlayFabTicket, ItemId } = req.body || {};
+  const pid = await validateTicket(PlayFabTicket);
+  if (!pid) return res.status(403).json({ Message: "Invalid ticket" });
+  if (!ItemId) return res.status(400).json({ Message: "Missing ItemId" });
+
+  try {
+    const item = (await getCatalog())[ItemId];
+    if (!item) return res.status(404).json({ Message: "Item not found" });
+
+    const price = (item.VirtualCurrencyPrices || {})[CURRENCY_CODE];
+    if (price === undefined)
+      return res.status(400).json({ Message: "Item not purchasable with this currency" });
+
+    const inv = await pf("/Server/GetUserInventory", { PlayFabId: pid });
+    if ((inv.Inventory || []).some((i) => i.ItemId === ItemId))
+      return res.status(409).json({ Message: "Already owned" });
+    if (((inv.VirtualCurrency || {})[CURRENCY_CODE] || 0) < price)
+      return res.status(402).json({ Message: "Not enough currency" });
+
+    await pf("/Server/SubtractUserVirtualCurrency", {
+      PlayFabId: pid,
+      VirtualCurrency: CURRENCY_CODE,
+      Amount: price,
+    });
+    try {
+      await pf("/Server/GrantItemsToUser", {
+        PlayFabId: pid,
+        CatalogVersion: CATALOG_VERSION,
+        ItemIds: [ItemId],
+      });
+    } catch (e) {
+      // refund if the grant failed
+      await pf("/Server/AddUserVirtualCurrency", {
+        PlayFabId: pid,
+        VirtualCurrency: CURRENCY_CODE,
+        Amount: price,
+      });
+      throw e;
     }
+    res.json({ Message: "Purchased", ItemId });
+  } catch (e) {
+    res.status(502).json({ Message: `PlayFab error: ${e.message}` });
+  }
+});
 
-    requests.post(url=VOTING_WEBHOOK, json=embed)
+// ------------------------------------------------------------ polls
+const polls = [
+  {
+    PollId: 2,
+    Question: "ARE YOU IN THE DISCORD YET?",
+    VoteOptions: ["YES", "NO"],
+    VoteCount: [0, 0],
+    PredictionCount: [0, 0],
+    StartTime: new Date().toISOString().slice(0, 10),
+    EndTime: "2030-01-01T17:00:00",
+    isActive: true,
+  },
+];
 
-    return jsonify({"Message": "Yay Votes Are Fixed, Very Cool"}), 200
+app.all("/api/FetchPoll", (req, res) => res.json(polls));
 
-nonces = {}
+app.post("/api/Vote", (req, res) => {
+  const { PollId, OptionIndex, IsPrediction } = req.body || {};
+  const poll = polls.find((p) => p.PollId === PollId);
+  if (!poll) return res.status(404).json({ Message: "Poll not found" });
+  if (!Number.isInteger(OptionIndex) || OptionIndex < 0 || OptionIndex >= poll.VoteOptions.length)
+    return res.status(400).json({ Message: "Bad option" });
 
-def discord_log(message, level="INFO"):
-    payload = {
-        "content": message,
-        "embeds": [{"title": level, "description": message, "color": 3066993}]
-    }
-    try:
-        print(f"[DISCORD LOG] Sending message: {message}")
-        requests.post(DISCORD_WEBHOOK, json=payload)
-    except Exception as e:
-        print(f"[DISCORD LOG ERROR] {e}")
-        
-def generate_nonce():
-    nonce = uuid.uuid4().hex
-    nonces[nonce] = time.time()
-    print(f"[NONCE GENERATED] {nonce}")
-    return nonce
+  poll[IsPrediction ? "PredictionCount" : "VoteCount"][OptionIndex]++;
+  res.json({ Message: "Vote counted" });
+});
 
-def is_nonce_valid(nonce):
-    valid = nonce in nonces and time.time() - nonces[nonce] < 300  
-    print(f"[NONCE VALIDATION] Nonce: {nonce}, Valid: {valid}")
-    if valid:
-        del nonces[nonce]  
-    return valid
-    
-@app.route('/api/GenerateNonce', methods=['GET'])
-def get_nonce():
-    print("[REQUEST] /api/GenerateNonce")
-    return jsonify({"nonce": generate_nonce()}), 200
+// ------------------------------------------------------------ misc
+const playfabCache = {};
+const nameSaves = {};
 
-def auth_headers():
-    if not SECRET_KEY:
-        raise ValueError("PlayFab Secret Key is not set in the environment variables")
+app.post("/api/CachePlayFabId", (req, res) => {
+  const j = req.body;
+  if (!j || !j.PlayFabId) return res.status(400).json({ Message: "Missing PlayFabId parameter" });
+  playfabCache[j.PlayFabId] = j;
+  res.json({ Message: "Success" });
+});
 
-    return {
-        "Content-Type": "application/json",
-        "X-Request-ID": hashlib.sha256(str(time.time()).encode('utf-8')).hexdigest(),
-        "X-Authorization": SECRET_KEY 
-    }
+app.post("/api/CheckForBadName", (req, res) => {
+  const arg = (req.body || {}).FunctionArgument || {};
+  if (!("name" in arg) || !("forRoom" in arg))
+    return res.status(400).json({ error: "Invalid input format" });
+  nameSaves[arg.name] = arg.forRoom;
+  res.json({ name: arg.name, forRoom: arg.forRoom });
+});
 
-@app.route('/api/PlayFabAuthentication', methods=['POST'])
-def playfab_auth():
-    data = request.get_json()
-
-    custom_id = data.get("CustomId")
-    nonce = data.get("Nonce")
-    oculus_token = data.get("OculusAccessToken")
-    platform = data.get("Platform")
-
-    if not all([custom_id, nonce, oculus_token, platform]):
-        discord_log(f"Missing parameters for CustomId: {custom_id}", "ERROR")
-        return jsonify({"error": "Missing parameters"}), 400
-
-    if not is_nonce_valid(nonce):
-        discord_log(f"Invalid nonce for CustomId: {custom_id}", "ERROR")
-        return jsonify({"error": "Invalid nonce"}), 403
-
-    if platform.lower() != "quest":
-        discord_log(f"Platform not allowed for CustomId: {custom_id}", "ERROR")
-        return jsonify({"error": "Platform not allowed"}), 403
-
-    try:
-        oculus_verify = requests.get(f"https://graph.oculus.com/me?access_token={oculus_token}")
-        oculus_verify.raise_for_status()
-    except requests.exceptions.RequestException as e:
-        discord_log(f"Oculus token verification failed for CustomId: {custom_id}. Error: {e}", "ERROR")
-        return jsonify({"error": "Oculus token verification failed"}), 403
-
-    user_data = oculus_verify.json()
-    org_scoped_id = user_data.get("id")
-
-    try:
-        login_response = requests.post(
-            f"https://{TITLE_ID}.playfabapi.com/Server/LoginWithServerCustomId",
-            json={"ServerCustomId": custom_id, "CreateAccount": True},
-            headers=auth_headers()
-        )
-        login_response.raise_for_status()
-    except requests.exceptions.RequestException as e:
-        discord_log(f"PlayFab login failed for CustomId: {custom_id}. Error: {e}", "ERROR")
-        return jsonify({"error": "PlayFab login failed"}), 403
-
-    login_data = login_response.json().get("data")
-    session_ticket = login_data["SessionTicket"]
-    entity_token = login_data["EntityToken"]["EntityToken"]
-
-    try:
-        requests.post(
-            f"https://{TITLE_ID}.playfabapi.com/Client/LinkCustomID",
-            json={"CustomId": org_scoped_id, "ForceLink": True},
-            headers={"content-type": "application/json", "x-authorization": session_ticket}
-        )
-    except requests.exceptions.RequestException as e:
-        discord_log(f"Failed to link OrgScopedId for CustomId: {custom_id}. Error: {e}", "ERROR")
-
-    discord_log(f"Successful login for CustomId: {custom_id} with OrgScopedId: {org_scoped_id}", "INFO")
-
-    return jsonify({
-        "PlayFabId": login_data["PlayFabId"],
-        "SessionTicket": session_ticket[:32] + "...",  
-        "EntityToken": entity_token,
-        "NonceUsed": nonce,
-        "OrgScopedId": org_scoped_id
-    }), 200
-
-@app.route('/api/v3/Photon', methods=['POST'])
-def api_authentication():
-    print("[REQUEST] /api/Authentication")
-    rjson = request.get_json()
-
-    ticket = rjson.get("Ticket")
-    nonce = rjson.get("Nonce")
-    title = rjson.get("AppId")
-    platform = rjson.get("Platform")
-    org_scoped_id = rjson.get("OrgScopedId")
-    custom_id = rjson.get("CustomId")
-    app_version = rjson.get("AppVersion", "Unknown")
-
-    if title != TITLE_ID:
-        print(f"[ERROR] Invalid App ID: {title}")
-        return jsonify({'status': 'error', 'message': 'Invalid App ID'}), 403
-    if platform != 'Android':
-        print(f"[ERROR] Invalid platform: {platform}")
-        return jsonify({'status': 'error', 'message': 'Invalid platform'}), 403
-    if nonce is None or not is_nonce_valid(nonce):
-        print(f"[ERROR] Invalid nonce: {nonce}")
-        return jsonify({'status': 'error', 'message': 'Invalid nonce'}), 403
-    if not custom_id or not custom_id.startswith(("OC", "PI")):
-        print(f"[ERROR] Invalid Custom ID: {custom_id}")
-        return jsonify({'status': 'error', 'message': 'Invalid Custom ID'}), 403
-
-    try:
-        session_validation_response = requests.post(
-            url=f"https://{TITLE_ID}.playfabapi.com/Server/ValidateSessionTicket",
-            json={"SessionTicket": ticket},
-            headers=auth_headers()
-        )
-        session_validation_response.raise_for_status()
-    except requests.exceptions.RequestException as e:
-        print(f"[ERROR] Session ticket validation failed: {e}")
-        return jsonify({'status': 'error', 'message': 'Invalid session ticket'}), 403
-
-    try:
-        result = session_validation_response.json()
-        playfab_id = result.get("data", {}).get("UserId", "Unknown")
-    except Exception as e:
-        print(f"[ERROR] Failed to parse session validation response: {e}")
-        playfab_id = "Unknown"
-
-    photon_payload = {
-        "content": f"🔗 **Photon Session Authenticated :D**",
-        "embeds": [{
-            "title": "Auth Event",
-            "color": 0x00FF99,
-            "fields": [
-                {"name": "UserId", "value": custom_id, "inline": True},
-                {"name": "AppVersion", "value": app_version, "inline": True},
-                {"name": "OrgScopedId", "value": org_scoped_id or "N/A", "inline": False},
-                {"name": "PlayFabId", "value": playfab_id, "inline": True},
-                {"name": "SessionTicket", "value": ticket[:32] + "...", "inline": False}
-            ],
-            "footer": {"text": "Photon Auth Webhook"}
-        }],
-        "username": "Photon AuthBot",
-        "avatar_url": ""
-    }
-
-    try:
-        print("[INFO] Sending Photon Auth webhook...")
-        requests.post(PHOTON_WEBHOOK_URL, json=photon_payload)
-    except Exception as e:
-        print(f"[PHOTON WEBHOOK ERROR] {e}")
-
-    print("[SUCCESS] Session validated")
-    return jsonify({'status': 'success', 'message': 'Session validated'}), 200
-
-@app.route("/api/td", methods=["POST", "GET"])
-def titledata():
-    req = requests.post(
-        url=f"https://{TITLE_ID}.playfabapi.com/Server/GetTitleData",
-        headers=auth_headers()
-    )
-
-    if req.status_code == 200:
-        return jsonify(req.json().get("data").get("Data"))
-    else:
-        return jsonify({})
-
-@app.route("/api/CachePlayFabId", methods=["POST"])
-def cacheplatfabid():
-    print("Received request to cache PlayFab ID")
-
-    if request.content_type != 'application/json':
-        print("Unsupported Media Type")
-        return jsonify({"Message": "Unsupported Media Type"}), 415
-
-    rjson = request.get_json()
-    print(f"Request JSON: {rjson}")
-
-    if not rjson or "PlayFabId" not in rjson:
-        print("Missing PlayFabId parameter")
-        return jsonify({"Message": "Missing PlayFabId parameter"}), 400
-
-    playfabCache[rjson["PlayFabId"]] = rjson
-    print(f"Cached PlayFab ID: {rjson['PlayFabId']}")
-    return jsonify({"Message": "Success"})
-    
-    
-@app.route('/api/CheckForBadName', methods=['POST'])
-def handle_request():
-    try:
-        data = request.get_json()
-
-        if 'FunctionArgument' not in data or 'name' not in data[
-                'FunctionArgument'] or 'forRoom' not in data[
-                    'FunctionArgument']:
-            print("Invalid input format")
-            raise ValueError("Invalid input format")
-
-        function_argument = data['FunctionArgument']
-
-        name = function_argument['name']
-        for_room = function_argument['forRoom']
-
-        name_saves[name] = for_room
-
-        response_data = {'name': name, 'forRoom': for_room}
-
-        print(f"for name {name} for a room is: {for_room}")
-
-        return jsonify(response_data)
-
-    except Exception as e:
-        app.logger.error(f"Error handling request: {str(e)}")
-        return jsonify({'error': str(e)}), 400
-
-if __name__ == "__main__":
-    app.run(debug=True, port=8080)
+app.listen(PORT, () => console.log(`Listening on ${PORT}`));
