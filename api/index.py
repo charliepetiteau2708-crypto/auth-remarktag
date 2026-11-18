@@ -27,6 +27,10 @@ if (!TITLE_ID || !SECRET_KEY) {
 }
 
 const PF = `https://${TITLE_ID}.playfabapi.com`;
+let waitUntil = () => {};
+try { ({ waitUntil } = require("@vercel/functions")); } catch {}
+const track = (p) => { try { waitUntil(p); } catch {} return p; };
+
 const app = express();
 app.use(express.json());
 
@@ -45,12 +49,12 @@ async function pf(path, body = {}) {
 // fire-and-forget so logging never slows a player down
 function webhook(url, payload) {
   if (!url) return;
-  fetch(url, {
+  track(fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
     signal: AbortSignal.timeout(5000),
-  }).catch((e) => console.log("[WEBHOOK ERROR]", e.message));
+  }).catch((e) => console.log("[WEBHOOK ERROR]", e.message)));
 }
 
 function log(message, level = "INFO") {
@@ -72,23 +76,27 @@ async function validateTicket(ticket) {
 }
 
 // ------------------------------------------------------------ nonces
-const nonces = new Map();
+// Stateless signed nonces: work on Vercel where each request may hit a
+// different instance (in-memory storage would not survive between calls).
 const NONCE_TTL = 300_000;
+const sign = (s) =>
+  crypto.createHmac("sha256", SECRET_KEY).update(s).digest("hex").slice(0, 32);
 
 function generateNonce() {
-  const n = crypto.randomUUID().replace(/-/g, "");
-  nonces.set(n, Date.now());
-  return n;
+  const body = Date.now().toString(36) + crypto.randomBytes(8).toString("hex");
+  return body + sign(body);
 }
 function consumeNonce(n) {
-  const t = nonces.get(n);
-  nonces.delete(n);
-  return t !== undefined && Date.now() - t < NONCE_TTL;
+  if (typeof n !== "string" || n.length < 40) return false;
+  const body = n.slice(0, -32);
+  const sig = n.slice(-32);
+  const expected = sign(body);
+  if (sig.length !== expected.length) return false;
+  if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return false;
+  const ts = parseInt(body.slice(0, -16), 36);
+  const age = Date.now() - ts;
+  return age < NONCE_TTL && age > -5000;
 }
-setInterval(() => {
-  const now = Date.now();
-  for (const [k, t] of nonces) if (now - t > NONCE_TTL) nonces.delete(k);
-}, 60_000).unref();
 
 app.all("/", (req, res) => res.send("Backend is running :)"));
 
@@ -132,12 +140,12 @@ app.post("/api/PlayFabAuthentication", async (req, res) => {
   const sessionTicket = login.SessionTicket;
 
   // link in the background so login responds faster
-  fetch(`${PF}/Client/LinkCustomID`, {
+  track(fetch(`${PF}/Client/LinkCustomID`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-Authorization": sessionTicket },
     body: JSON.stringify({ CustomId: orgScopedId, ForceLink: true }),
     signal: AbortSignal.timeout(8000),
-  }).catch((e) => console.log("[LINK ERROR]", e.message));
+  }).catch((e) => console.log("[LINK ERROR]", e.message)));
 
   log(`Login OK: ${customId} / ${orgScopedId}`);
 
@@ -323,4 +331,8 @@ app.post("/api/CheckForBadName", (req, res) => {
   res.json({ name: arg.name, forRoom: arg.forRoom });
 });
 
-app.listen(PORT, () => console.log(`Listening on ${PORT}`));
+module.exports = app;
+
+if (require.main === module) {
+  app.listen(PORT, () => console.log(`Listening on ${PORT}`));
+}
