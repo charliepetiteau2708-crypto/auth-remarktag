@@ -855,13 +855,13 @@ def titledata():
             "2024.09.20",
 
         "MOTD":
-            "<color=red>[ WELCOME TO METRO SWINGERS! ]</color>\n"
+            "<color=red>[ WELCOME TO ZERG TAG! ]</color>\n"
 "<color=red>WELCOME TUFF GAME!</color>\n"
 "<color=blue>https://metroswingers.vercel.app/</color>\n"
 "<color=yellow>JOIN OUR DISCORD!</color>\n"
-"<color=purple>GG/METROSWINGERS</color>\n"
-"<color=blue>HYPPER AND 2XGHOSTYJR ARE THE OWNERS</color>\n"
-"<color=orange>IM NOT A SKID SO IM USING MY OWN BACKEND</color>",
+"<color=purple>GG/ZERGTAG</color>\n"
+"<color=blue>AZE AND ZERG ARE THE OWNERS</color>\n"
+"<color=orange>HAVE FUN</color>",
 
         "SeasonalStoreBoardSign":
             "<color=yellow>"
