@@ -857,10 +857,9 @@ def titledata():
         "MOTD":
             "<color=red>[ WELCOME TO ZERG TAG! ]</color>\n"
 "<color=red>WELCOME TUFF GAME!</color>\n"
-"<color=blue>https://metroswingers.vercel.app/</color>\n"
 "<color=yellow>JOIN OUR DISCORD!</color>\n"
 "<color=purple>GG/ZERGTAG</color>\n"
-"<color=blue>AZE AND ZERG ARE THE OWNERS</color>\n"
+"<color=blue>ZERO AND ZERG ARE THE OWNERS</color>\n"
 "<color=orange>HAVE FUN</color>",
 
         "SeasonalStoreBoardSign":
